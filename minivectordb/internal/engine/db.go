@@ -45,6 +45,7 @@ type DB struct {
 	opts    Options
 	scratch []byte
 	fi      fastInsertBufs // reusable buffers for the fast insert path
+	stream  *InsertStream  // speculative insert parser, created by NewInsertStream
 }
 
 // ddl is the JSON payload of a RecDDL record.
@@ -220,6 +221,9 @@ func (db *DB) rowBytes(off int64) []byte {
 func (db *DB) Close() error {
 	if db.txn != nil {
 		db.rollback()
+	}
+	if s := db.stream; s != nil {
+		s.shutdown()
 	}
 	err := db.log.Close()
 	if os.Getenv("MVDB_SYNC_STATS") != "" {

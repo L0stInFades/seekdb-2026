@@ -86,21 +86,17 @@ func main() {
 	// is handled without a goroutine hand-off. SIGTERM/SIGINT are checked
 	// between requests; a signal that arrives while blocked on stdin is
 	// handled by a watcher that closes stdin, which ends the read with EOF.
-	rd := bufio.NewReaderSize(os.Stdin, 1<<20)
+	lr := &lineReader{src: os.Stdin, buf: make([]byte, 1<<20)}
+	stream := db.NewInsertStream()
+	feed := newStreamFeed(stream)
+	lr.onPartial = feed.onPartial
+	lr.onMove = feed.onMove
 	next := func() line {
-		// ReadSlice hands back a view into the reader buffer instead of
+		// next hands back a view into the reader buffer instead of
 		// allocating a fresh slice per request. The request is fully
-		// processed before the next read, so any strings parseFast aliases
-		// into this view never outlive the buffer.
-		b, err := rd.ReadSlice('\n')
-		if err == bufio.ErrBufferFull {
-			// Line longer than the buffer: ReadSlice has already consumed
-			// the first len(b) bytes, so copy them and append the rest.
-			head := append([]byte(nil), b...)
-			var rest []byte
-			rest, err = rd.ReadBytes('\n')
-			b = append(head, rest...)
-		}
+		// processed before the next read, so any strings parseFast or the
+		// stream feed aliases into this view never outlive the buffer.
+		b, err := lr.next()
 		if len(b) == 0 && err != nil {
 			if err != io.EOF && !errors.Is(err, os.ErrClosed) {
 				logf("read stdin: %v", err)
@@ -135,6 +131,9 @@ func main() {
 			os.Exit(closeDB())
 		default:
 		}
+		// Speculation from the previous request must stop before the line
+		// buffer is reused.
+		feed.reset()
 		l := next()
 		if l.eof {
 			os.Exit(closeDB())
@@ -180,7 +179,7 @@ func main() {
 			out.Flush()
 			continue
 		}
-		res, err := db.Exec(*req.SQL)
+		res, err := db.ExecStream(*req.SQL, stream)
 		switch {
 		case err == nil && res.IsQuery, err == nil && res.HasAffected:
 			out.Write(enc.Result(req.ID, res))
