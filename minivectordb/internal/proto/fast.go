@@ -102,7 +102,7 @@ func parseFast(b []byte, scratch []byte) (*Request, []byte, bool) {
 			// Escapes: decode into the scratch. A backslash before the
 			// first quote means the naive closing quote is inside an
 			// escape, so the escape-aware scan decides.
-			out, end, ok := unescapeInto(scratch[:0], rest)
+			out, end, ok := unescapeInto(scratch[:0], rest, j)
 			scratch = out
 			if !ok {
 				return nil, scratch, false
@@ -175,22 +175,29 @@ func parseFast(b []byte, scratch []byte) (*Request, []byte, bool) {
 // (a surrogate, an unknown escape, a truncated escape or string, a raw
 // control byte or invalid UTF-8) fails so the whole line can go to
 // encoding/json, whose surrogate pairing and error rules stay authoritative.
-func unescapeInto(dst, src []byte) (out []byte, end int, ok bool) {
+func unescapeInto(dst, src []byte, quote int) (out []byte, end int, ok bool) {
 	i, n := 0, len(src)
 	for i < n {
-		j := bytes.IndexAny(src[i:], "\"\\")
-		if j < 0 {
-			// No closing quote and no escape: unterminated string.
-			return dst, 0, false
+		// Keep the next quote across escaped newlines. IndexByte can
+		// scan a long vector literal a word or SIMD register at a time.
+		if i > quote {
+			j := bytes.IndexByte(src[i:], '"')
+			if j < 0 {
+				return dst, 0, false
+			}
+			quote = i + j
 		}
-		run := src[i : i+j]
+		stop := quote
+		if slash := bytes.IndexByte(src[i:quote], '\\'); slash >= 0 {
+			stop = i + slash
+		}
+		run := src[i:stop]
 		if !validStringBytes(run) {
 			return dst, 0, false
 		}
 		dst = append(dst, run...)
-		i += j
-		switch src[i] {
-		case '"':
+		i = stop
+		if i == quote {
 			return dst, i + 1, true
 		}
 		// src[i] == '\\'

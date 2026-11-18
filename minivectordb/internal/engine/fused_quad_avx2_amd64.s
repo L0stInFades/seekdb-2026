@@ -115,6 +115,9 @@ dot:
 	VADDPD Y3, Y1, Y1
 	VCMPPD $30, Y11, Y1, Y1
 	VMOVMSKPD Y1, CX
+	// With a tight TopK bound most four-row groups have no survivors.
+	CMPQ CX, $15
+	JE next
 	TESTQ $1, CX
 	JNZ second
 	MOVQ 0(R13)(R14*1), BX
@@ -270,6 +273,8 @@ dot:
 	VADDPD Y3, Y1, Y1
 	VCMPPD $30, Y11, Y1, Y1
 	VMOVMSKPD Y1, SI
+	CMPQ SI, $15
+	JE next
 	TESTQ $1, SI
 	JNZ second
 	MOVL 0(BX), CX

@@ -282,7 +282,9 @@ func (db *DB) vectorTopK(t *Table, q []float32, pred func([]byte) bool, k int, a
 	if blk != nil {
 		n = blk.n
 	}
-	tk := &topK{k: k, pred: pred, db: db, h: make(hitHeap, 0, k+1)}
+	// LIMIT plus OFFSET can be much larger than the candidate set. The
+	// overlay may contribute additional rows, including new filter matches.
+	tk := &topK{k: k, pred: pred, db: db, h: make(hitHeap, 0, min(k, min(n, x.live)+len(ov)))}
 	// scan visits slots lo..hi-1 in order. With the SIMD kernel and the log
 	// mapping it gathers the rows that pass the cheap checks into batches
 	// and computes their distances with one kernel call per batch; the
@@ -591,12 +593,14 @@ func (db *DB) vectorTopK(t *Table, q []float32, pred func([]byte) bool, k int, a
 		var wg sync.WaitGroup
 		for w := 0; w < workers; w++ {
 			lo, hi := n*w/workers, n*(w+1)/workers
+			partRows := hi - lo
 			var codedLo, codedHi, tailLo, tailHi int
 			if balanced {
 				codedLo, codedHi = cut*w/workers, cut*(w+1)/workers
 				tailLo, tailHi = cut+(n-cut)*w/workers, cut+(n-cut)*(w+1)/workers
+				partRows = codedHi - codedLo + tailHi - tailLo
 			}
-			p := &topK{k: k, pred: pred, db: db, h: make(hitHeap, 0, k+1)}
+			p := &topK{k: k, pred: pred, db: db, h: make(hitHeap, 0, min(k, partRows))}
 			parts[w] = p
 			wg.Add(1)
 			go func() {
